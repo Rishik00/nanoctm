@@ -331,9 +331,9 @@ def compute_normalized_entropy(logits, reduction='mean'):
 
     return normalized_entropy
 
-def compute_certainty(prediction, prediction_reshaper):
+def compute_certainty(current_prediction, prediction_reshaper):
 
-    B = prediction.size(0)
+    B = current_prediction.size(0)
     reshaped_pred = current_prediction.reshape([B] + prediction_reshaper)
     ne = compute_normalized_entropy(reshaped_pred)
 
