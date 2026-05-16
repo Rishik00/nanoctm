@@ -28,38 +28,38 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 
-
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class CTMConfig:
     """All hyperparameters in one place. Change here, nowhere else."""
 
     # Model dimensions
-    d_model: int = 128          # Number of neurons (size of the internal state vector)
-    d_input: int = 128          # Dimension used for attention Q/K/V
-    d_embedding: int = 128      # Backbone embedding output dimension
-    n_embedding: int = 2        # Embedding vocabulary size (parity: {0, 1})
+    d_model: int = 256  # Number of neurons (size of the internal state vector)
+    d_input: int = 256  # Dimension used for attention Q/K/V
+    d_embedding: int = 256  # Backbone embedding output dimension
+    n_embedding: int = 2  # Embedding vocabulary size (parity: {0, 1})
 
     # Attention
     num_heads: int = 8
 
     # Memory / NLM
-    memory_length: int = 10     # History window length per neuron
+    memory_length: int = 20  # History window length per neuron
 
     # Synchronisation
-    n_synch_out: int = 32       # Neurons used for output-sync (drives predictions)
-    n_synch_action: int = 32    # Neurons used for action-sync (drives attention query)
+    n_synch_out: int = 64  # Neurons used for output-sync (drives predictions)
+    n_synch_action: int = 64  # Neurons used for action-sync (drives attention query)
     neuron_select_type: Literal["first-last", "random", "random-pairing"] = "first-last"
 
     # Task
-    sequence_length: int = 64
+    sequence_length: int = 32
 
     # Training
-    dropout: float = 0.01
-    iterations: int = 5         # T: number of thinking steps per forward pass
+    dropout: float = 0.1
+    iterations: int = 20  # T: number of thinking steps per forward pass
 
     # Derived — set automatically, do not pass manually
     out_dims: int = field(init=False)
@@ -68,13 +68,18 @@ class CTMConfig:
 
     def __post_init__(self):
         self.out_dims = self.sequence_length * 2
-        self.synch_rep_size_action = _sync_rep_size(self.neuron_select_type, self.n_synch_action)
-        self.synch_rep_size_out    = _sync_rep_size(self.neuron_select_type, self.n_synch_out)
+        self.synch_rep_size_action = _sync_rep_size(
+            self.neuron_select_type, self.n_synch_action
+        )
+        self.synch_rep_size_out = _sync_rep_size(
+            self.neuron_select_type, self.n_synch_out
+        )
 
 
 # ---------------------------------------------------------------------------
 # Dataset
 # ---------------------------------------------------------------------------
+
 
 class ParityDataset(Dataset):
     """
@@ -108,6 +113,7 @@ class ParityDataset(Dataset):
 # Positional Embedding
 # ---------------------------------------------------------------------------
 
+
 class RotaryPositionalEmbedding(nn.Module):
     """
     Learned positional embedding based on rotating a unit vector.
@@ -136,19 +142,23 @@ class RotaryPositionalEmbedding(nn.Module):
         sin_t = torch.sin(thetas).unsqueeze(1)
 
         # 2×2 rotation matrices for each position: (seq_len, 2, 2)
-        rot = torch.stack([
-            torch.cat([ cos_t, -sin_t], dim=1),
-            torch.cat([ sin_t,  cos_t], dim=1),
-        ], dim=1)
+        rot = torch.stack(
+            [
+                torch.cat([cos_t, -sin_t], dim=1),
+                torch.cat([sin_t, cos_t], dim=1),
+            ],
+            dim=1,
+        )
 
-        rotated = torch.einsum('sij,j->si', rot, start)     # (seq_len, 2)
-        pe = self.projection(rotated).transpose(0, 1)       # (d_model, seq_len)
-        return pe.unsqueeze(0).expand(x.size(0), -1, -1)   # (B, d_model, seq_len)
+        rotated = torch.einsum("sij,j->si", rot, start)  # (seq_len, 2)
+        pe = self.projection(rotated).transpose(0, 1)  # (d_model, seq_len)
+        return pe.unsqueeze(0).expand(x.size(0), -1, -1)  # (B, d_model, seq_len)
 
 
 # ---------------------------------------------------------------------------
 # Neuron-Level Model (NLM)
 # ---------------------------------------------------------------------------
+
 
 class NLM(nn.Module):
     """
@@ -184,7 +194,7 @@ class NLM(nn.Module):
         dropout: float = 0.0,
     ):
         super().__init__()
-        self.dropout   = nn.Dropout(dropout)
+        self.dropout = nn.Dropout(dropout)
         self.layernorm = nn.LayerNorm(memory_length, elementwise_affine=True)
 
         bound = 1.0 / math.sqrt(memory_length + out_dims)
@@ -203,15 +213,16 @@ class NLM(nn.Module):
             activated: (B, N) — new activated state for each neuron
         """
         x = self.dropout(state_trace)
-        x = self.layernorm(x)                                   # (B, N, M)
-        x = torch.einsum('BNM,MON->BNO', x, self.W) + self.b   # (B, N, 2)
-        x = F.glu(x, dim=-1)                                    # (B, N, 1)
-        return x.squeeze(-1) / self.temperature                 # (B, N)
+        x = self.layernorm(x)  # (B, N, M)
+        x = torch.einsum("BNM,MON->BNO", x, self.W) + self.b  # (B, N, 2)
+        x = F.glu(x, dim=-1)  # (B, N, 1)
+        return x.squeeze(-1) / self.temperature  # (B, N)
 
 
 # ---------------------------------------------------------------------------
 # Synapse Network
 # ---------------------------------------------------------------------------
+
 
 class SynapseNet(nn.Module):
     """
@@ -226,7 +237,9 @@ class SynapseNet(nn.Module):
         super().__init__()
         self.net = nn.Sequential(
             nn.Dropout(dropout),
-            nn.Linear(d_input + d_model, d_model * 2),  # × 2 because GLU halves it back to d_model
+            nn.Linear(
+                d_input + d_model, d_model * 2
+            ),  # × 2 because GLU halves it back to d_model
             nn.GLU(dim=-1),
             nn.LayerNorm(d_model),
         )
@@ -238,6 +251,7 @@ class SynapseNet(nn.Module):
 # ---------------------------------------------------------------------------
 # Synchronisation helpers
 # ---------------------------------------------------------------------------
+
 
 def _sync_rep_size(neuron_select_type: str, n_synch: int) -> int:
     """
@@ -271,11 +285,15 @@ def _init_neuron_indices(
             idx = torch.arange(0, n_synch, device=device)
         else:  # action
             idx = torch.arange(d_model - n_synch, d_model, device=device)
-        return idx, idx   # left == right for first-last
+        return idx, idx  # left == right for first-last
 
     elif neuron_select_type in ("random", "random-pairing"):
-        left  = torch.from_numpy(np.random.choice(d_model, size=n_synch, replace=False)).to(device)
-        right = torch.from_numpy(np.random.choice(d_model, size=n_synch, replace=False)).to(device)
+        left = torch.from_numpy(
+            np.random.choice(d_model, size=n_synch, replace=False)
+        ).to(device)
+        right = torch.from_numpy(
+            np.random.choice(d_model, size=n_synch, replace=False)
+        ).to(device)
         return left, right
 
     raise ValueError(f"Unknown neuron_select_type: {neuron_select_type!r}")
@@ -284,7 +302,7 @@ def _init_neuron_indices(
 def compute_sync(
     activated_state: torch.Tensor,
     decay_alpha: Optional[torch.Tensor],
-    decay_beta:  Optional[torch.Tensor],
+    decay_beta: Optional[torch.Tensor],
     r: torch.Tensor,
     neuron_select_type: str,
     n_synch: int,
@@ -314,23 +332,27 @@ def compute_sync(
     """
     if neuron_select_type == "random-pairing":
         # Element-wise product of explicit neuron pairs
-        pairwise = activated_state[:, idx_left] * activated_state[:, idx_right]  # (B, n_synch)
+        pairwise = (
+            activated_state[:, idx_left] * activated_state[:, idx_right]
+        )  # (B, n_synch)
     else:
         # Outer product, upper triangle only (matrix is symmetric so no double-counting)
-        sel_left  = activated_state[:, idx_left]    # (B, n_synch) — left == right for first-last
+        sel_left = activated_state[
+            :, idx_left
+        ]  # (B, n_synch) — left == right for first-last
         sel_right = activated_state[:, idx_right]
-        outer = sel_left.unsqueeze(2) * sel_right.unsqueeze(1)          # (B, n_synch, n_synch)
-        i, j  = torch.triu_indices(n_synch, n_synch, device=activated_state.device)
-        pairwise = outer[:, i, j]                                        # (B, synch_rep_size)
+        outer = sel_left.unsqueeze(2) * sel_right.unsqueeze(1)  # (B, n_synch, n_synch)
+        i, j = torch.triu_indices(n_synch, n_synch, device=activated_state.device)
+        pairwise = outer[:, i, j]  # (B, synch_rep_size)
 
     # Recurrent decay update — exponential moving average of pairwise products
     # Check both alpha and beta together so type narrowing works correctly.
     if decay_alpha is None or decay_beta is None:
         decay_alpha = pairwise
-        decay_beta  = torch.ones_like(pairwise)
+        decay_beta = torch.ones_like(pairwise)
     else:
         decay_alpha = r * decay_alpha + pairwise
-        decay_beta  = r * decay_beta  + 1.0
+        decay_beta = r * decay_beta + 1.0
 
     synchronisation = decay_alpha / decay_beta.sqrt()
     return synchronisation, decay_alpha, decay_beta
@@ -339,6 +361,7 @@ def compute_sync(
 # ---------------------------------------------------------------------------
 # Entropy / certainty helpers
 # ---------------------------------------------------------------------------
+
 
 def _normalised_entropy(logits: torch.Tensor) -> torch.Tensor:
     """
@@ -351,10 +374,10 @@ def _normalised_entropy(logits: torch.Tensor) -> torch.Tensor:
     Returns:
         norm_ent: (B,)
     """
-    probs    = logits.softmax(dim=-1)
-    log_p    = logits.log_softmax(dim=-1)
-    entropy  = -(probs * log_p).sum(dim=-1)
-    max_ent  = math.log(logits.size(-1))
+    probs = logits.softmax(dim=-1)
+    log_p = logits.log_softmax(dim=-1)
+    entropy = -(probs * log_p).sum(dim=-1)
+    max_ent = math.log(logits.size(-1))
     norm_ent = entropy / max_ent
     if logits.dim() > 2:
         norm_ent = norm_ent.flatten(1).mean(-1)
@@ -381,6 +404,7 @@ def compute_certainty(prediction: torch.Tensor, reshaper: list) -> torch.Tensor:
 # Main Model
 # ---------------------------------------------------------------------------
 
+
 class NanoCTM(nn.Module):
     """
     Continuous Thought Machine — minimal, trainable implementation.
@@ -403,10 +427,10 @@ class NanoCTM(nn.Module):
 
     # Class-level buffer type declarations — needed because register_buffer's
     # PyTorch type stub returns None, leaving Pyright unable to infer the type.
-    idx_left_action:  torch.Tensor
+    idx_left_action: torch.Tensor
     idx_right_action: torch.Tensor
-    idx_left_out:     torch.Tensor
-    idx_right_out:    torch.Tensor
+    idx_left_out: torch.Tensor
+    idx_right_out: torch.Tensor
 
     def __init__(self, config: CTMConfig):
         super().__init__()
@@ -430,7 +454,7 @@ class NanoCTM(nn.Module):
         self.nlm = NLM(
             memory_length=cfg.memory_length,
             d_model=cfg.d_model,
-            out_dims=2,        # 2 because NLM uses GLU: (B, N, 2) → (B, N, 1) → (B, N)
+            out_dims=2,  # 2 because NLM uses GLU: (B, N, 2) → (B, N, 1) → (B, N)
             dropout=cfg.dropout,
         )
 
@@ -454,7 +478,7 @@ class NanoCTM(nn.Module):
         # --- Learnable decay parameters for synchronisation ---
         # Clamped to [0, 15] in forward pass → r = exp(-clamp(...)) ∈ (exp(-15), 1)
         self.decay_params_action = nn.Parameter(torch.zeros(cfg.synch_rep_size_action))
-        self.decay_params_out    = nn.Parameter(torch.zeros(cfg.synch_rep_size_out))
+        self.decay_params_out = nn.Parameter(torch.zeros(cfg.synch_rep_size_out))
 
         # --- Learnable initial recurrent state ---
         self.start_activated_state = nn.Parameter(
@@ -474,10 +498,10 @@ class NanoCTM(nn.Module):
         il_o, ir_o = _init_neuron_indices(
             cfg.neuron_select_type, "out", cfg.d_model, cfg.n_synch_out, device
         )
-        self.register_buffer("idx_left_action",  il_a)
+        self.register_buffer("idx_left_action", il_a)
         self.register_buffer("idx_right_action", ir_a)
-        self.register_buffer("idx_left_out",     il_o)
-        self.register_buffer("idx_right_out",    ir_o)
+        self.register_buffer("idx_left_out", il_o)
+        self.register_buffer("idx_right_out", ir_o)
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -489,24 +513,24 @@ class NanoCTM(nn.Module):
             certainties: (B, 2,       T) — [uncertainty, certainty] at each step
         """
         cfg = self.config
-        B   = x.size(0)
+        B = x.size(0)
 
         # ------------------------------------------------------------------
         # 1. Encode input into static key/value pairs
         #    These don't change across thinking iterations — the model attends
         #    to the same input representation at each of the T steps.
         # ------------------------------------------------------------------
-        kv  = self.backbone(x).float()          # (B, seq_len, d_embedding)
-        kv  = self.kv_proj(kv)                  # (B, seq_len, d_input)
-        kv_t = kv.transpose(1, 2)               # (B, d_input, seq_len)
-        pos  = self.pos_embedding(kv_t)         # (B, d_input, seq_len)
-        kv   = (kv_t + pos).transpose(1, 2)     # (B, seq_len, d_input)
+        kv = self.backbone(x).float()  # (B, seq_len, d_embedding)
+        kv = self.kv_proj(kv)  # (B, seq_len, d_input)
+        kv_t = kv.transpose(1, 2)  # (B, d_input, seq_len)
+        pos = self.pos_embedding(kv_t)  # (B, d_input, seq_len)
+        kv = (kv_t + pos).transpose(1, 2)  # (B, seq_len, d_input)
 
         # ------------------------------------------------------------------
         # 2. Initialise recurrent state
         #    .clone() is necessary because state_trace is modified each step.
         # ------------------------------------------------------------------
-        state_trace     = self.start_state_trace.unsqueeze(0).expand(B, -1, -1).clone()
+        state_trace = self.start_state_trace.unsqueeze(0).expand(B, -1, -1).clone()
         activated_state = self.start_activated_state.unsqueeze(0).expand(B, -1).clone()
 
         # ------------------------------------------------------------------
@@ -514,13 +538,17 @@ class NanoCTM(nn.Module):
         #    Clamping keeps r in a stable range; without it the model can
         #    collapse to r≈0 (no memory) or r≈1 (no forgetting).
         # ------------------------------------------------------------------
-        r_action = torch.exp(
-            -self.decay_params_action.clamp(0.0, 15.0)
-        ).unsqueeze(0).expand(B, -1)            # (B, synch_rep_size_action)
+        r_action = (
+            torch.exp(-self.decay_params_action.clamp(0.0, 15.0))
+            .unsqueeze(0)
+            .expand(B, -1)
+        )  # (B, synch_rep_size_action)
 
-        r_out = torch.exp(
-            -self.decay_params_out.clamp(0.0, 15.0)
-        ).unsqueeze(0).expand(B, -1)            # (B, synch_rep_size_out)
+        r_out = (
+            torch.exp(-self.decay_params_out.clamp(0.0, 15.0))
+            .unsqueeze(0)
+            .expand(B, -1)
+        )  # (B, synch_rep_size_out)
 
         # ------------------------------------------------------------------
         # 4. Warm up out-sync accumulators (once, before the loop)
@@ -528,54 +556,68 @@ class NanoCTM(nn.Module):
         #    already has a non-trivial value at iteration t=0.
         # ------------------------------------------------------------------
         _, da_out, db_out = compute_sync(
-            activated_state, None, None, r_out,
-            cfg.neuron_select_type, cfg.n_synch_out,
-            self.idx_left_out, self.idx_right_out,
+            activated_state,
+            None,
+            None,
+            r_out,
+            cfg.neuron_select_type,
+            cfg.n_synch_out,
+            self.idx_left_out,
+            self.idx_right_out,
         )
 
         predictions = torch.empty(B, cfg.out_dims, cfg.iterations, device=x.device)
-        certainties = torch.empty(B, 2,            cfg.iterations, device=x.device)
+        certainties = torch.empty(B, 2, cfg.iterations, device=x.device)
         da_action = db_action = None
 
         # ------------------------------------------------------------------
         # 5. Recurrent thinking loop
         # ------------------------------------------------------------------
         for t in range(cfg.iterations):
-
             # (a) Action-sync: pairwise neuron correlations → attention query
             sync_action, da_action, db_action = compute_sync(
-                activated_state, da_action, db_action, r_action,
-                cfg.neuron_select_type, cfg.n_synch_action,
-                self.idx_left_action, self.idx_right_action,
+                activated_state,
+                da_action,
+                db_action,
+                r_action,
+                cfg.neuron_select_type,
+                cfg.n_synch_action,
+                self.idx_left_action,
+                self.idx_right_action,
             )
-            q = self.q_proj(sync_action).unsqueeze(1)       # (B, 1, d_input)
+            q = self.q_proj(sync_action).unsqueeze(1)  # (B, 1, d_input)
 
             # (b) Cross-attend over the (fixed) input key/value pairs
             attn_out, _ = self.attention(q, kv, kv, need_weights=False)
-            attn_out = attn_out.squeeze(1)                  # (B, d_input)
+            attn_out = attn_out.squeeze(1)  # (B, d_input)
 
             # (c) Synapse network: merge attention context with current state
             pre_syn = torch.cat([attn_out, activated_state], dim=-1)
-            state   = self.synapses(pre_syn)                # (B, d_model)
+            state = self.synapses(pre_syn)  # (B, d_model)
 
             # (d) Update rolling state trace: drop the oldest step, append new one
             #     NOTE: this allocates a new tensor every step — first optimisation
             #     target is replacing this with a circular buffer (write-index + roll).
             state_trace = torch.cat(
                 [state_trace[:, :, 1:], state.unsqueeze(-1)], dim=-1
-            )                                               # (B, d_model, memory_length)
+            )  # (B, d_model, memory_length)
 
             # (e) NLM: each neuron independently reads its own history
-            activated_state = self.nlm(state_trace)         # (B, d_model)
+            activated_state = self.nlm(state_trace)  # (B, d_model)
 
             # (f) Out-sync: pairwise correlations → prediction logits
             sync_out, da_out, db_out = compute_sync(
-                activated_state, da_out, db_out, r_out,
-                cfg.neuron_select_type, cfg.n_synch_out,
-                self.idx_left_out, self.idx_right_out,
+                activated_state,
+                da_out,
+                db_out,
+                r_out,
+                cfg.neuron_select_type,
+                cfg.n_synch_out,
+                self.idx_left_out,
+                self.idx_right_out,
             )
-            pred      = self.output_proj(sync_out)                          # (B, out_dims)
-            certainty = compute_certainty(pred, [cfg.sequence_length, 2])   # (B, 2)
+            pred = self.output_proj(sync_out)  # (B, out_dims)
+            certainty = compute_certainty(pred, [cfg.sequence_length, 2])  # (B, 2)
 
             predictions[..., t] = pred
             certainties[..., t] = certainty
@@ -586,6 +628,7 @@ class NanoCTM(nn.Module):
 # ---------------------------------------------------------------------------
 # Loss
 # ---------------------------------------------------------------------------
+
 
 def ctm_loss(
     predictions: torch.Tensor,
@@ -610,26 +653,31 @@ def ctm_loss(
         scalar loss
     """
     B, _, T = predictions.shape
-    total = torch.zeros(1, device=predictions.device)
 
+    # Softmax-normalise certainty scores across T steps so weights always sum to 1.
+    # Raw certainty ∈ [0, 1] has a degenerate zero: if certainty → 0 the weighted
+    # loss → 0 too, so the model learns to be maximally uncertain rather than correct.
+    # Softmax removes that escape hatch — the gradient signal is always non-zero.
+    cert_weights = F.softmax(certainties[:, 1, :], dim=-1)  # (B, T)
+
+    total = torch.zeros(1, device=predictions.device)
     for t in range(T):
-        # Reshape from (B, seq_len*2) → (B*seq_len, 2) for cross_entropy
         logits = predictions[:, :, t].reshape(B, sequence_length, 2)
         logits = logits.reshape(B * sequence_length, 2)
-        tgts   = targets.reshape(B * sequence_length)
+        tgts = targets.reshape(B * sequence_length)
 
-        ce = F.cross_entropy(logits, tgts, reduction='none')    # (B * seq_len,)
-        ce = ce.reshape(B, sequence_length).mean(dim=-1)        # (B,)
+        ce = F.cross_entropy(logits, tgts, reduction="none")  # (B * seq_len,)
+        ce = ce.reshape(B, sequence_length).mean(dim=-1)  # (B,)
 
-        certainty_weight = certainties[:, 1, t]                 # (B,) — certainty at step t
-        total = total + (certainty_weight * ce).mean()
+        total = total + (cert_weights[:, t] * ce).mean()
 
-    return total / T
+    return total
 
 
 # ---------------------------------------------------------------------------
 # Training loop
 # ---------------------------------------------------------------------------
+
 
 def train(config: Optional[CTMConfig] = None):
     """
@@ -646,8 +694,8 @@ def train(config: Optional[CTMConfig] = None):
     print(f"Device     : {device}")
     print(f"Config     : {config}\n")
 
-    dataset    = ParityDataset(config.sequence_length, length=100_000)
-    dataloader = DataLoader(dataset, batch_size=32, shuffle=True, num_workers=0)
+    dataset = ParityDataset(config.sequence_length, length=10000000)
+    dataloader = DataLoader(dataset, batch_size=256, shuffle=True, num_workers=4)
 
     model = NanoCTM(config).to(device)
     optim = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.01)
