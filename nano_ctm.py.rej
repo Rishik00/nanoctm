@@ -1,0 +1,86 @@
+diff a/nano_ctm.py b/nano_ctm.py	(rejected hunks)
+@@ -679,42 +679,69 @@ def ctm_loss(
+ # ---------------------------------------------------------------------------
+ 
+ 
+-def train(config: Optional[CTMConfig] = None):
++def train(config: Optional[CTMConfig] = None, fast: bool = True):
+     """
+-    Baseline training loop for the parity task.
++    Training loop for the parity task.
+ 
+     Prints loss and certainty at t=0 vs t=T-1 every 100 steps.
+     Certainty should grow from t=0 to t=T across training — the model learns
+     to converge to a confident answer over its thinking iterations.
++
++    Args:
++        fast: apply GPU speed-ups when CUDA is available:
++              torch.compile(reduce-overhead) + bfloat16 autocast +
++              fused AdamW + TF32 matmul + B=2048 (GPU saturation point).
++              Disable if you need exact eager-mode reproducibility.
+     """
+     if config is None:
+         config = CTMConfig()
+ 
+     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+-    print(f"Device     : {device}")
++    on_cuda = device.type == "cuda"
++
++    if fast and on_cuda:
++        torch.set_float32_matmul_precision("high")  # TF32 tensor-core matmul
++
++    batch_size = 2048 if (fast and on_cuda) else 256
++
++    print(f"Device     : {device}  (fast={fast and on_cuda})")
++    print(f"Batch      : {batch_size}")
+     print(f"Config     : {config}\n")
+ 
+-    dataset = ParityDataset(config.sequence_length, length=10000000)
+-    dataloader = DataLoader(dataset, batch_size=256, shuffle=True, num_workers=4)
++    dataset   = ParityDataset(config.sequence_length, length=10_000_000)
++    dataloader = DataLoader(
++        dataset, batch_size=batch_size, shuffle=True,
++        num_workers=4, pin_memory=on_cuda, persistent_workers=True,
++    )
+ 
+     model = NanoCTM(config).to(device)
+-    optim = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.01)
+-    print(f"Parameters : {sum(p.numel() for p in model.parameters()):,}\n")
++    if fast and on_cuda:
++        model = torch.compile(model, mode="reduce-overhead")
++
++    optim = torch.optim.AdamW(
++        model.parameters(), lr=1e-3, weight_decay=0.01,
++        fused=(fast and on_cuda),
++    )
++    raw = model._orig_mod if hasattr(model, "_orig_mod") else model
++    print(f"Parameters : {sum(p.numel() for p in raw.parameters()):,}\n")
+ 
+     model.train()
+     for step, (vector, target) in enumerate(dataloader):
+-        vector = vector.to(device)
+-        target = target.to(device)
+-
+-        # Convert ±1 input to {0, 1} indices for the embedding layer
++        vector = vector.to(device, non_blocking=on_cuda)
++        target = target.to(device, non_blocking=on_cuda)
+         x = (vector == 1).long()
+ 
+-        predictions, certainties = model(x)
+-        loss = ctm_loss(predictions, target, certainties, config.sequence_length)
++        if fast and on_cuda:
++            with torch.autocast("cuda", dtype=torch.bfloat16):
++                predictions, certainties = model(x)
++                loss = ctm_loss(predictions, target, certainties, config.sequence_length)
++        else:
++            predictions, certainties = model(x)
++            loss = ctm_loss(predictions, target, certainties, config.sequence_length)
+ 
+-        optim.zero_grad()
++        optim.zero_grad(set_to_none=True)
+         loss.backward()
+-        nn.utils.clip_grad_norm_(model.parameters(), 1.0)
++        nn.utils.clip_grad_norm_(raw.parameters(), 1.0)
+         optim.step()
+ 
+         if step % 100 == 0:
