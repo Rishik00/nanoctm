@@ -12,6 +12,7 @@ built up incrementally:
 
 Run with:  python bench.py
 """
+
 import time
 
 import torch
@@ -31,14 +32,18 @@ from nano_ctm import (
 )
 
 # ─────────────────────────────── knobs ───────────────────────────────────────
-WARMUP = 50          # steps before timing starts (covers compile + GPU warm-up)
-BENCH  = 200         # timed steps
-BATCH  = 256
+WARMUP = 50  # steps before timing starts (covers compile + GPU warm-up)
+BENCH = 200  # timed steps
+BATCH = 256
 DEVICE = torch.device("cuda")
 
 cfg = CTMConfig(
-    d_model=256, d_input=256, d_embedding=256,
-    sequence_length=32, iterations=20, memory_length=20,
+    d_model=256,
+    d_input=256,
+    d_embedding=256,
+    sequence_length=32,
+    iterations=20,
+    memory_length=20,
 )
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -46,14 +51,18 @@ cfg = CTMConfig(
 def make_loader() -> DataLoader:
     ds = ParityDataset(cfg.sequence_length, length=10_000_000)
     return DataLoader(
-        ds, batch_size=BATCH, shuffle=True, num_workers=4, pin_memory=True,
+        ds,
+        batch_size=BATCH,
+        shuffle=True,
+        num_workers=4,
+        pin_memory=True,
         persistent_workers=True,
     )
 
 
 def run_bench(model_fn, loader, name, *, use_compile=False, use_bf16=False) -> float:
     model = model_fn().to(DEVICE)
-    opt   = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.01)
+    opt = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.01)
 
     if use_compile:
         print(f"  [{name}] compiling … ", end="", flush=True)
@@ -64,7 +73,7 @@ def run_bench(model_fn, loader, name, *, use_compile=False, use_bf16=False) -> f
 
     def step():
         vec, tgt = next(it)
-        x   = (vec.to(DEVICE, non_blocking=True) == 1).long()
+        x = (vec.to(DEVICE, non_blocking=True) == 1).long()
         tgt = tgt.to(DEVICE, non_blocking=True)
         if use_bf16:
             with torch.autocast("cuda", dtype=torch.bfloat16):
@@ -100,6 +109,7 @@ def run_bench(model_fn, loader, name, *, use_compile=False, use_bf16=False) -> f
 # Optimised model
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class CircularBufCTM(NanoCTM):
     """
     Two targeted optimisations over the baseline:
@@ -124,17 +134,18 @@ class CircularBufCTM(NanoCTM):
         cfg = config
         if cfg.neuron_select_type != "random-pairing":
             i_a, j_a = torch.triu_indices(cfg.n_synch_action, cfg.n_synch_action)
-            i_o, j_o = torch.triu_indices(cfg.n_synch_out,    cfg.n_synch_out)
+            i_o, j_o = torch.triu_indices(cfg.n_synch_out, cfg.n_synch_out)
             self.register_buffer("triu_i_a", i_a)
             self.register_buffer("triu_j_a", j_a)
             self.register_buffer("triu_i_o", i_o)
             self.register_buffer("triu_j_o", j_o)
 
-    def _sync_fast(self, activated_state, da, db, r,
-                   idx_left, idx_right, triu_i, triu_j):
-        sel_l    = activated_state[:, idx_left]
-        sel_r    = activated_state[:, idx_right]
-        outer    = sel_l.unsqueeze(2) * sel_r.unsqueeze(1)
+    def _sync_fast(
+        self, activated_state, da, db, r, idx_left, idx_right, triu_i, triu_j
+    ):
+        sel_l = activated_state[:, idx_left]
+        sel_r = activated_state[:, idx_right]
+        outer = sel_l.unsqueeze(2) * sel_r.unsqueeze(1)
         pairwise = outer[:, triu_i, triu_j]
 
         if da is None:
@@ -150,43 +161,61 @@ class CircularBufCTM(NanoCTM):
         cfg = self.config
         B, M = x.size(0), cfg.memory_length
 
-        kv   = self.backbone(x).float()
-        kv   = self.kv_proj(kv)
+        kv = self.backbone(x).float()
+        kv = self.kv_proj(kv)
         kv_t = kv.transpose(1, 2)
-        pos  = self.pos_embedding(kv_t)
-        kv   = (kv_t + pos).transpose(1, 2)
+        pos = self.pos_embedding(kv_t)
+        kv = (kv_t + pos).transpose(1, 2)
 
         # Allocate circular buffer once
-        state_trace     = self.start_state_trace.unsqueeze(0).expand(B, -1, -1).clone()
+        state_trace = self.start_state_trace.unsqueeze(0).expand(B, -1, -1).clone()
         activated_state = self.start_activated_state.unsqueeze(0).expand(B, -1).clone()
         buf_idx = 0
 
-        r_action = torch.exp(-self.decay_params_action.clamp(0., 15.)).unsqueeze(0).expand(B, -1)
-        r_out    = torch.exp(-self.decay_params_out.clamp(0., 15.)).unsqueeze(0).expand(B, -1)
-
-        _, da_out, db_out = self._sync_fast(
-            activated_state, None, None, r_out,
-            self.idx_left_out, self.idx_right_out,
-            self.triu_i_o, self.triu_j_o,
+        r_action = (
+            torch.exp(-self.decay_params_action.clamp(0.0, 15.0))
+            .unsqueeze(0)
+            .expand(B, -1)
+        )
+        r_out = (
+            torch.exp(-self.decay_params_out.clamp(0.0, 15.0))
+            .unsqueeze(0)
+            .expand(B, -1)
         )
 
-        predictions = torch.empty(B, cfg.out_dims,  cfg.iterations, device=x.device)
-        certainties = torch.empty(B, 2,              cfg.iterations, device=x.device)
+        _, da_out, db_out = self._sync_fast(
+            activated_state,
+            None,
+            None,
+            r_out,
+            self.idx_left_out,
+            self.idx_right_out,
+            self.triu_i_o,
+            self.triu_j_o,
+        )
+
+        predictions = torch.empty(B, cfg.out_dims, cfg.iterations, device=x.device)
+        certainties = torch.empty(B, 2, cfg.iterations, device=x.device)
         da_action = db_action = None
 
         for t in range(cfg.iterations):
             sync_a, da_action, db_action = self._sync_fast(
-                activated_state, da_action, db_action, r_action,
-                self.idx_left_action, self.idx_right_action,
-                self.triu_i_a, self.triu_j_a,
+                activated_state,
+                da_action,
+                db_action,
+                r_action,
+                self.idx_left_action,
+                self.idx_right_action,
+                self.triu_i_a,
+                self.triu_j_a,
             )
 
-            q        = self.q_proj(sync_a).unsqueeze(1)
+            q = self.q_proj(sync_a).unsqueeze(1)
             attn_out, _ = self.attention(q, kv, kv, need_weights=False)
             attn_out = attn_out.squeeze(1)
 
             pre_syn = torch.cat([attn_out, activated_state], dim=-1)
-            state   = self.synapses(pre_syn)
+            state = self.synapses(pre_syn)
 
             # In-place circular buffer write — no tensor allocation
             state_trace[:, :, buf_idx] = state
@@ -195,9 +224,14 @@ class CircularBufCTM(NanoCTM):
             activated_state = self.nlm(state_trace)
 
             sync_o, da_out, db_out = self._sync_fast(
-                activated_state, da_out, db_out, r_out,
-                self.idx_left_out, self.idx_right_out,
-                self.triu_i_o, self.triu_j_o,
+                activated_state,
+                da_out,
+                db_out,
+                r_out,
+                self.idx_left_out,
+                self.idx_right_out,
+                self.triu_i_o,
+                self.triu_j_o,
             )
             pred = self.output_proj(sync_o)
             cert = compute_certainty(pred, [cfg.sequence_length, 2])
@@ -210,39 +244,51 @@ class CircularBufCTM(NanoCTM):
 
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def main():
     loader = make_loader()
 
     print(f"\nDevice  : {torch.cuda.get_device_name(0)}")
-    print(f"Config  : seq_len={cfg.sequence_length}  iterations={cfg.iterations}  "
-          f"d_model={cfg.d_model}  batch={BATCH}")
+    print(
+        f"Config  : seq_len={cfg.sequence_length}  iterations={cfg.iterations}  "
+        f"d_model={cfg.d_model}  batch={BATCH}"
+    )
     print(f"Warmup  : {WARMUP}  |  Bench : {BENCH} steps\n")
     print("─" * 72)
 
     results = {}
     results["baseline"] = run_bench(
-        lambda: NanoCTM(cfg), loader, "baseline",
+        lambda: NanoCTM(cfg),
+        loader,
+        "baseline",
     )
     results["circ_buf"] = run_bench(
-        lambda: CircularBufCTM(cfg), loader, "circ_buf  (circular buf + precomp triu)",
+        lambda: CircularBufCTM(cfg),
+        loader,
+        "circ_buf  (circular buf + precomp triu)",
     )
     results["compiled"] = run_bench(
-        lambda: CircularBufCTM(cfg), loader, "compiled  (circ_buf + torch.compile)",
+        lambda: CircularBufCTM(cfg),
+        loader,
+        "compiled  (circ_buf + torch.compile)",
         use_compile=True,
     )
     results["bf16"] = run_bench(
-        lambda: CircularBufCTM(cfg), loader, "bf16      (compiled + autocast bf16)",
-        use_compile=True, use_bf16=True,
+        lambda: CircularBufCTM(cfg),
+        loader,
+        "bf16      (compiled + autocast bf16)",
+        use_compile=True,
+        use_bf16=True,
     )
 
     print("─" * 72)
-    best     = max(results, key=results.get)
+    best = max(results, key=results.get)
     baseline = results["baseline"]
     print(f"\nFastest : {best}  →  {results[best]:.1f} steps/sec")
     print(f"\nSpeedup summary (vs baseline @ {baseline:.1f} sps):")
     for name, sps in results.items():
         tag = " ← best" if name == best else ""
-        print(f"  {name:<42}  {sps/baseline:.2f}x{tag}")
+        print(f"  {name:<42}  {sps / baseline:.2f}x{tag}")
     print()
 
 

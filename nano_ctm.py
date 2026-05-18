@@ -587,7 +587,6 @@ class NanoCTM(nn.Module):
             )
             q = self.q_proj(sync_action).unsqueeze(1)  # (B, 1, d_input)
 
-            # Alrightttttt
             # (b) Cross-attend over the (fixed) input key/value pairs
             attn_out, _ = self.attention(q, kv, kv, need_weights=False)
             attn_out = attn_out.squeeze(1)  # (B, d_input)
@@ -709,10 +708,14 @@ def train(config: Optional[CTMConfig] = None, fast: bool = True):
     print(f"Batch      : {batch_size}")
     print(f"Config     : {config}\n")
 
-    dataset   = ParityDataset(config.sequence_length, length=10_000_000)
+    dataset = ParityDataset(config.sequence_length, length=10_000_000)
     dataloader = DataLoader(
-        dataset, batch_size=batch_size, shuffle=True,
-        num_workers=4, pin_memory=on_cuda, persistent_workers=True,
+        dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=4,
+        pin_memory=on_cuda,
+        persistent_workers=True,
     )
 
     model = NanoCTM(config).to(device)
@@ -720,7 +723,9 @@ def train(config: Optional[CTMConfig] = None, fast: bool = True):
         model = torch.compile(model, mode="reduce-overhead")
 
     optim = torch.optim.AdamW(
-        model.parameters(), lr=1e-3, weight_decay=0.01,
+        model.parameters(),
+        lr=1e-3,
+        weight_decay=0.01,
         fused=(fast and on_cuda),
     )
     raw = model._orig_mod if hasattr(model, "_orig_mod") else model
@@ -735,7 +740,9 @@ def train(config: Optional[CTMConfig] = None, fast: bool = True):
         if fast and on_cuda:
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 predictions, certainties = model(x)
-                loss = ctm_loss(predictions, target, certainties, config.sequence_length)
+                loss = ctm_loss(
+                    predictions, target, certainties, config.sequence_length
+                )
         else:
             predictions, certainties = model(x)
             loss = ctm_loss(predictions, target, certainties, config.sequence_length)
