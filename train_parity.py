@@ -43,7 +43,6 @@ from torch.utils.data import DataLoader
 
 from nano_ctm import CTMConfig, NanoCTM, ParityDataset, ctm_loss
 
-
 # ---------------------------------------------------------------------------
 # Training config
 # ---------------------------------------------------------------------------
@@ -73,7 +72,7 @@ class TrainConfig:
 
     # ---- Validation ----
     val_every: int = 200
-    val_size: int = 4096    # fixed holdout: generated once, reused throughout
+    val_size: int = 4096  # fixed holdout: generated once, reused throughout
 
     # ---- Infrastructure ----
     name: str = "parity_1024"
@@ -119,7 +118,7 @@ def make_parity_data(
         labels: (n, seq_len) int64 ∈ {0, 1}   — running parity (odd # of -1s seen so far)
     """
     vec = (2 * torch.randint(0, 2, (n, seq_len), device=device) - 1).float()
-    labels = ((vec < 0).long().cumsum(dim=1) % 2)
+    labels = (vec < 0).long().cumsum(dim=1) % 2
     x = (vec == 1).long()
     return x, labels
 
@@ -130,15 +129,15 @@ def make_parity_data(
 
 # Maps a display name to a tuple of parameter-name prefixes that belong to that group.
 _GRAD_GROUPS: Dict[str, Tuple[str, ...]] = {
-    "backbone":   ("backbone.",),
-    "kv_proj":    ("kv_proj.",),
-    "pos_emb":    ("pos_embedding.",),
-    "nlm":        ("nlm.",),
-    "synapses":   ("synapses.",),
-    "attention":  ("attention.",),
-    "q_proj":     ("q_proj.",),
-    "output_proj":("output_proj.",),
-    "decay":      ("decay_params_",),
+    "backbone": ("backbone.",),
+    "kv_proj": ("kv_proj.",),
+    "pos_emb": ("pos_embedding.",),
+    "nlm": ("nlm.",),
+    "synapses": ("synapses.",),
+    "attention": ("attention.",),
+    "q_proj": ("q_proj.",),
+    "output_proj": ("output_proj.",),
+    "decay": ("decay_params_",),
     "init_state": ("start_",),
 }
 
@@ -152,9 +151,7 @@ def compute_grad_norms(model: nn.Module) -> Dict[str, float]:
     Call this AFTER loss.backward() and BEFORE optim.step().
     """
     named_grads: Dict[str, torch.Tensor] = {
-        name: p.grad
-        for name, p in model.named_parameters()
-        if p.grad is not None
+        name: p.grad for name, p in model.named_parameters() if p.grad is not None
     }
 
     if not named_grads:
@@ -192,9 +189,9 @@ def compute_accuracy(
         fraction of (sample, position) pairs that are correctly classified
     """
     B = predictions.size(0)
-    logits_last = predictions[:, :, -1].float()          # (B, out_dims)
-    logits_last = logits_last.reshape(B, seq_len, 2)     # (B, seq_len, 2)
-    pred_class = logits_last.argmax(dim=-1)              # (B, seq_len)
+    logits_last = predictions[:, :, -1].float()  # (B, out_dims)
+    logits_last = logits_last.reshape(B, seq_len, 2)  # (B, seq_len, 2)
+    pred_class = logits_last.argmax(dim=-1)  # (B, seq_len)
     return (pred_class == targets).float().mean().item()
 
 
@@ -235,9 +232,9 @@ def validate(
     """
     raw_model.eval()
     losses: List[float] = []
-    accs:   List[float] = []
-    c0s:    List[float] = []
-    cTs:    List[float] = []
+    accs: List[float] = []
+    c0s: List[float] = []
+    cTs: List[float] = []
 
     for i in range(0, len(val_x), chunk):
         xb = val_x[i : i + chunk]
@@ -261,9 +258,9 @@ def validate(
     n = len(losses)
     return {
         "val_loss": sum(losses) / n,
-        "val_acc":  sum(accs)   / n,
-        "cert_t0":  sum(c0s)    / n,
-        "cert_tT":  sum(cTs)    / n,
+        "val_acc": sum(accs) / n,
+        "cert_t0": sum(c0s) / n,
+        "cert_tT": sum(cTs) / n,
     }
 
 
@@ -292,7 +289,8 @@ def train_run(tc: TrainConfig, log_dir: Optional[Path] = None) -> Path:
     with open(log_dir / "config.json", "w") as f:
         json.dump(
             {"train": asdict(tc), "ctm": asdict(ctm_cfg)},
-            f, indent=2,
+            f,
+            indent=2,
         )
 
     # --- Fixed validation holdout (generated once, lives on device) ---
@@ -327,18 +325,18 @@ def train_run(tc: TrainConfig, log_dir: Optional[Path] = None) -> Path:
 
     # --- Header ---
     print(
-        f"\n{'='*70}\n"
+        f"\n{'=' * 70}\n"
         f"  {tc.name}\n"
         f"  {n_params:,} params | seq={tc.sequence_length} | "
         f"T={tc.iterations} | M={tc.memory_length} | d={tc.d_model}\n"
         f"  bf16={use_bf16}  compile={tc.compile_model and on_cuda}  "
         f"B={tc.batch_size}  steps={tc.total_steps}\n"
         f"  logs → {log_dir}\n"
-        f"{'='*70}"
+        f"{'=' * 70}"
     )
 
     train_log = log_dir / "train.jsonl"
-    val_log   = log_dir / "val.jsonl"
+    val_log = log_dir / "val.jsonl"
 
     t_run_start = time.perf_counter()
     step = 0
@@ -375,18 +373,18 @@ def train_run(tc: TrainConfig, log_dir: Optional[Path] = None) -> Path:
 
         # Metrics
         loss_val = loss.item()
-        acc  = compute_accuracy(preds.detach().float(), target, ctm_cfg.sequence_length)
-        c0   = certs[:, 1,  0].mean().item()
-        cT   = certs[:, 1, -1].mean().item()
+        acc = compute_accuracy(preds.detach().float(), target, ctm_cfg.sequence_length)
+        c0 = certs[:, 1, 0].mean().item()
+        cT = certs[:, 1, -1].mean().item()
 
         # Write train record
         record: dict = {
-            "step":     step,
-            "loss":     round(loss_val, 6),
-            "acc":      round(acc,      6),
-            "cert_t0":  round(c0,       5),
-            "cert_tT":  round(cT,       5),
-            "step_ms":  round(step_ms,  1),
+            "step": step,
+            "loss": round(loss_val, 6),
+            "acc": round(acc, 6),
+            "cert_t0": round(c0, 5),
+            "cert_tT": round(cT, 5),
+            "step_ms": round(step_ms, 1),
             **{f"gnorm_{k}": round(v, 6) for k, v in gnorms.items()},
         }
         _append_jsonl(train_log, record)
@@ -416,18 +414,18 @@ def train_run(tc: TrainConfig, log_dir: Optional[Path] = None) -> Path:
     # --- Summary ---
     total_time = time.perf_counter() - t_run_start
     summary = {
-        "name":           tc.name,
-        "n_params":       n_params,
-        "total_steps":    step,
-        "total_time_s":   round(total_time, 1),
-        "steps_per_sec":  round(step / total_time, 2),
+        "name": tc.name,
+        "n_params": n_params,
+        "total_steps": step,
+        "total_time_s": round(total_time, 1),
+        "steps_per_sec": round(step / total_time, 2),
     }
     with open(log_dir / "summary.json", "w") as f:
         json.dump(summary, f, indent=2)
 
     print(
         f"\n  Done — {step} steps in {total_time:.0f}s "
-        f"({step/total_time:.1f} steps/s)\n"
+        f"({step / total_time:.1f} steps/s)\n"
     )
 
     return log_dir
@@ -450,7 +448,9 @@ def sweep_scale(base: TrainConfig) -> None:
     for d in [256, 512, 1024]:
         cfg = replace(
             base,
-            d_model=d, d_input=d, d_embedding=d,
+            d_model=d,
+            d_input=d,
+            d_embedding=d,
             name=f"{base.name}_scale_d{d}",
         )
         train_run(cfg)
@@ -475,36 +475,40 @@ def parse_args() -> argparse.Namespace:
     )
 
     # Model
-    p.add_argument("--d-model",        type=int,   default=512)
-    p.add_argument("--d-input",        type=int,   default=None,
-                   help="defaults to --d-model")
-    p.add_argument("--d-embedding",    type=int,   default=None,
-                   help="defaults to --d-model")
-    p.add_argument("--seq-len",        type=int,   default=1024)
-    p.add_argument("--iterations",     type=int,   default=20)
-    p.add_argument("--memory-length",  type=int,   default=64)
-    p.add_argument("--n-synch",        type=int,   default=64)
-    p.add_argument("--neuron-select",  type=str,   default="first-last",
-                   choices=["first-last", "random", "random-pairing"])
-    p.add_argument("--num-heads",      type=int,   default=8)
-    p.add_argument("--dropout",        type=float, default=0.1)
+    p.add_argument("--d-model", type=int, default=512)
+    p.add_argument("--d-input", type=int, default=None, help="defaults to --d-model")
+    p.add_argument(
+        "--d-embedding", type=int, default=None, help="defaults to --d-model"
+    )
+    p.add_argument("--seq-len", type=int, default=1024)
+    p.add_argument("--iterations", type=int, default=20)
+    p.add_argument("--memory-length", type=int, default=64)
+    p.add_argument("--n-synch", type=int, default=64)
+    p.add_argument(
+        "--neuron-select",
+        type=str,
+        default="first-last",
+        choices=["first-last", "random", "random-pairing"],
+    )
+    p.add_argument("--num-heads", type=int, default=8)
+    p.add_argument("--dropout", type=float, default=0.1)
 
     # Training
-    p.add_argument("--batch-size",     type=int,   default=128)
-    p.add_argument("--lr",             type=float, default=3e-4)
-    p.add_argument("--weight-decay",   type=float, default=0.01)
-    p.add_argument("--steps",          type=int,   default=5000)
-    p.add_argument("--grad-clip",      type=float, default=1.0)
+    p.add_argument("--batch-size", type=int, default=128)
+    p.add_argument("--lr", type=float, default=3e-4)
+    p.add_argument("--weight-decay", type=float, default=0.01)
+    p.add_argument("--steps", type=int, default=5000)
+    p.add_argument("--grad-clip", type=float, default=1.0)
 
     # Validation
-    p.add_argument("--val-every",      type=int,   default=200)
-    p.add_argument("--val-size",       type=int,   default=4096)
+    p.add_argument("--val-every", type=int, default=200)
+    p.add_argument("--val-size", type=int, default=4096)
 
     # Infrastructure
-    p.add_argument("--name",           type=str,   default="parity_1024")
-    p.add_argument("--no-compile",     action="store_true")
-    p.add_argument("--no-bf16",        action="store_true")
-    p.add_argument("--seed",           type=int,   default=42)
+    p.add_argument("--name", type=str, default="parity_1024")
+    p.add_argument("--no-compile", action="store_true")
+    p.add_argument("--no-bf16", action="store_true")
+    p.add_argument("--seed", type=int, default=42)
 
     # Sweep
     p.add_argument(
