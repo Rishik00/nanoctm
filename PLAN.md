@@ -11,51 +11,38 @@
 
 ---
 
-## Phase 1: Training Validation
+## Phase 1: Training Validation ✅
 Confirm the model actually learns before optimising anything.
 
-- [ ] Run full training on parity (`sequence_length=64`, `iterations=5`)
-- [ ] Add per-step accuracy to the training log (not just loss)
-- [ ] Verify **certainty grows from t=0 → t=T** across training — this is the key
+- [x] Run full training on parity (`sequence_length=64`, `iterations=5`)
+- [x] Add per-step accuracy to the training log (not just loss)
+- [x] Verify **certainty grows from t=0 → t=T** across training — this is the key
       behavioural signature of CTM working correctly
-- [ ] Establish baseline wall-clock time per step (CPU and target GPU)
+- [x] Establish baseline wall-clock time per step (CPU and target GPU)
 
 ---
 
-## Phase 2: Easy Wins (no architecture changes)
+## Phase 2: Easy Wins (no architecture changes) ✅
 
-- [ ] **Circular buffer for `state_trace`**
-  - Currently: `torch.cat([trace[:,:,1:], state.unsqueeze(-1)], dim=-1)` — allocates a
-    new tensor every iteration × every step
-  - Fix: write-index + modular indexing, reorder via `torch.roll` or explicit index gather
-  - Expected gain: removes `T × memory_length` allocations per forward pass
-
-- [ ] **`torch.compile` the model**
-  - `model = torch.compile(model)` — single line, often 10–30% speedup on GPU
-  - Try `mode="reduce-overhead"` first, then `mode="max-autotune"` for the target GPU
-  - Watch for graph breaks (the state_trace cat is a likely culprit — fix circular buffer first)
-
-- [ ] **Profile the baseline**
-  - Use `torch.profiler` to find the actual bottleneck before guessing
-  - Candidates: NLM einsum, sync outer product, state_trace cat, attention
+- [x] **Circular buffer for `state_trace`**
+  - Eager benefit negligible (GPU alloc fast enough), but cleans up compiled graph — kept in DeepOptCTM
+- [x] **`torch.compile(mode="reduce-overhead")`** — **5.7× speedup**, dominant single gain
+- [x] **bfloat16 autocast** — +15% on top of compile (6.6× total)
+- [x] **Fused AdamW** — +18% on top of compile+bf16 (7.8× total)
+- [x] **Profile the baseline** — ran `torch.profiler`, found Flash Attention backward (18%), K/V recomputation, and pairwise sync allocation as top bottlenecks
 
 ---
 
-## Phase 3: Attention Optimisation
+## Phase 3: Attention Optimisation ✅
 The attention is called **T times per forward pass** — any speedup here multiplies by T.
 
-- [ ] **FlashAttention via `F.scaled_dot_product_attention`**
-  - Replace `nn.MultiheadAttention` with manual Q/K/V projections + `F.sdpa`
-  - `F.sdpa` uses FlashAttention automatically when inputs are on CUDA + correct dtype
-  - Already have `need_weights=False` which is a prerequisite
-
-- [ ] **FlexAttention (PyTorch ≥ 2.5)**
-  - Useful if we want custom attention masks or relative bias in future tasks
-  - Worth trying on the target GPU to compare vs plain sdpa
-
-- [ ] **Q shape** — current Q is `(B, 1, d_input)` (single query per step)
-  - This is already the cheapest possible attention pattern; confirm the GPU
-    is still compute-bound here (if not, attention isn't the bottleneck)
+- [x] **K/V projection hoisting** (biggest win) — K and V are computed from static input; moved
+  outside the T loop, saving 19/20 of all K/V projection compute. At B=2048: ~860 MFLOP → 43 MFLOP.
+- [x] **Replace `F.sdpa` / Flash Attention with manual bmm** — at seq_len=32, Flash Attention's
+  tiling overhead exceeds the work. Two explicit `torch.bmm` calls fuse into a single Triton kernel
+  under `torch.compile`.
+- [x] **Q shape confirmed** — single query `(B, 1, d_input)` is already the cheapest pattern.
+- [ ] **FlexAttention** — not yet tried; relevant if adding custom masks for harder tasks.
 
 ---
 
@@ -71,12 +58,12 @@ The NLM einsum `'BNM,MON->BNO'` is a batched matmul over N=d_model neurons.
 
 ---
 
-## Phase 5: Sync Computation
-- [ ] The outer product + triu indexing allocates intermediates every step
-  - For `n_synch=32`, outer is `(B, 32, 32)` — small, but called `2 × T` times per batch
-  - Consider pre-computing the triu index tensors once and reusing (already done for
-    `idx_left/right` — same principle for `i, j = triu_indices(...)`)
-- [ ] Register `i, j` triu indices as buffers (currently recomputed every forward call)
+## Phase 5: Sync Computation ✅
+- [x] **Direct pairwise indexing** — replaced `(B, 64, 64)` outer product + triu extraction with
+  direct element-wise product using pre-computed combined indices. Eliminates the 4 MB intermediate
+  allocation called 2×T=40 times per step.
+- [x] **Pre-initialised decay accumulators** — removed `None` branch from sync function, giving
+  the compiler a single clean code path through the loop.
 
 ---
 
@@ -92,6 +79,23 @@ Once optimisations are in, pick a real benchmark to measure against.
   - Measure: steps/sec, memory usage, FLOP utilisation (via `torch.profiler`)
   - Compare: baseline → +circular buffer → +compile → +FlashAttn → +bf16
   - Each optimisation should be a measurable, isolated improvement
+
+---
+
+## Phase 7: CTM as a Task Head (NLP)
+
+Using the CTM as a lightweight reasoning head on top of a frozen pretrained backbone.
+
+- [x] **SST-2 binary sentiment (DistilBERT backbone)** — 86.35% val accuracy, 1.3M trainable
+  params, ~2 epochs. Certainty dynamics confirmed: cert_tT > cert_t0 throughout training.
+  See `reports/bert_report.md`.
+- [ ] **LR schedule** — warmup + cosine decay; flat lr=1e-3 causes loss noise in late training
+- [ ] **More epochs** — 3–5 expected to saturate; 88–90%+ likely with same setup
+- [ ] **Reduce n_synch** — cut 64 → 32, synch_rep 2080 → 528; 83% of trainable params currently
+  live in q_proj + output_proj
+- [ ] **Pre-cache backbone outputs** — backbone is frozen; re-running it per epoch is pure waste
+- [ ] **Harder NLP tasks** — e.g. MultiNLI (3-class), CoLA (linguistic acceptability), tasks
+  that plausibly require multi-step reasoning to reveal the CTM's advantage
 
 ---
 
