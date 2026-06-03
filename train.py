@@ -9,7 +9,7 @@ import numpy as np
 from ctm import CTM, CTMConfig
 
 # TODO: move dataset to experiments/ once that folder exists
-from nano_ctm import ParityDataset
+from legacy.nano_ctm import ParityDataset
 
 
 def ctm_loss(preds: torch.Tensor, targets: torch.Tensor, certs: torch.Tensor) -> torch.Tensor:

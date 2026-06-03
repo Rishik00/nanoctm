@@ -9,6 +9,7 @@ __pycache__/
 logs/
 deprecated/
 tutorials/
+legacy/
 nano_expanded_remaining/nanoctm/
 *.patch
 *.rej
