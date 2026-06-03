@@ -1,0 +1,29 @@
+# Run metadata
+run_name: parity_v1
+seed: 42
+log_dir: logs
+
+# Backbone
+backbone: parity_embedding
+
+# Sequence
+seq_len: 32
+
+# Model dimensions
+d_model: 256
+n_synch: 64
+memory_length: 20
+iterations: 20
+
+# Training
+batch_size: 256
+lr: 0.001
+weight_decay: 0.01
+optimizer: adam   # "adam" | "muon" (muon requires third-party package)
+max_steps: 2000   # -1 for full epoch
+
+# Hardware
+use_compile: false
+compile_mode: reduce-overhead
+use_flash: false
+use_triton: false
