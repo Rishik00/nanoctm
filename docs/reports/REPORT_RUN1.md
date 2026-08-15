@@ -1,3 +1,6 @@
+> ⚠️ **LEGACY REPORT — not reproducible from current `main`.**
+> Ran on `train_parity.py` (now under `legacy/`), logs in `logs/20260517_135541_run1_parity1024/`. The *findings* (self-quenching, out_dims scaling, certainty collapse) remain valid analysis; the *code path* has since been refactored. Re-verify against `ctm.py` before citing as current behavior.
+
 # Experiment Report: run1_parity1024
 
 **Date:** 2026-05-17  

@@ -1,3 +1,5 @@
+> ⚠️ **LEGACY REPORT — not reproducible from current `main`.**
+> Describes the pre-refactor code (`nano_ctm.py`, `bench2.py`, `DeepOptCTM`, `neuron_select_type="random-pairing"`), now under `legacy/`. The refactored `ctm.py` on `main` is the *un-optimized baseline* — no KV-hoisting, no random-pairing — so these throughput numbers cannot be regenerated as-is. Kept as history. Numbers to be re-earned on refactored code.
 
 # nanoCTM Benchmarking Report
 

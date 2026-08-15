@@ -1,3 +1,5 @@
+> ⚠️ **LEGACY REPORT — not reproducible from current `main`.** Duplicate of `docs/reports/REPORT.md`.
+> Describes the pre-refactor code (`nano_ctm.py`, `bench2.py`, `DeepOptCTM`, `neuron_select_type="random-pairing"`), now under `legacy/`. The refactored `ctm.py` on `main` is the *un-optimized baseline*. Kept as history.
 
 # nanoCTM Benchmarking Report
 

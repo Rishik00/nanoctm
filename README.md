@@ -4,17 +4,6 @@ nanoGPT but the model is allowed to think before answering. controversial.
 
 A minimal, single-file implementation of the [Continuous Thought Machine](https://sakana.ai/ctm/) (CTM) — cleaned up, trainable from scratch, and progressively optimised. The goal is to understand how CTMs work from the inside: decompose the architecture, figure out where the compute goes, make it fast, and find out what actually breaks when you try to scale them.
 
-## what's in the box
-
-```
-nano_ctm.py                    — the whole model. one file. read it top to bottom.
-train_parity.py                — research training script with full metric logging
-triain_bert_nanoctm.py         — CTM head on frozen DistilBERT, SST-2
-PLAN.md                        — roadmap; what's done and what's next
-reports/REPORT.md              — full benchmarking report (phases 1–5)
-reports/REPORT_RUN1.md         — run1: parity at seq_len=1024, failure analysis
-reports/bert_report.md         — run2: CTM head on frozen DistilBERT, SST-2
-```
 
 ## the idea
 
@@ -24,7 +13,7 @@ The CTM runs your input through T recurrent "thinking" iterations before committ
 
 ```bash
 pip install torch numpy
-python nano_ctm.py
+python train.py
 ```
 
 Pass `train(fast=True)` to enable `torch.compile + bfloat16 + fused AdamW + B=2048` — the full optimised stack.

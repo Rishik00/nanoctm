@@ -1,3 +1,6 @@
+> ⚠️ **LEGACY REPORT — not reproducible from current `main`.**
+> Ran on the old `nano_ctm.py` with a DistilBERT backbone. The refactored `backbone.py` ships `bert`/`gpt2` (not DistilBERT) and `ctm.py` is the un-optimized baseline. The 86.35% result and certainty dynamics are historical; re-earn on refactored code before citing.
+
 # NanoCTM + Frozen DistilBERT — SST-2 Benchmark Report
 
 **Date:** 2026-05-21  

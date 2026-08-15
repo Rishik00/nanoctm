@@ -177,7 +177,7 @@ def train(args: dict) -> dict:
             elapsed = time.perf_counter() - t_train_start
             ms_per_step = (elapsed / max(idx, 1)) * 1000 if idx > 0 else 0.0
             print(f"  [{args['run_name']}] step {idx:4d} | loss {loss.item():.4f} "
-                  f"| acc {acc:.3f} | cert {cert_start:.3f}→{cert_final:.3f} "
+                  f"| acc {acc:.3f} | cert {cert_start:.3f}->{cert_final:.3f} "
                   f"| {ms_per_step:.1f}ms/step | {elapsed:.1f}s elapsed")
 
         if max_steps > 0 and idx >= max_steps:
@@ -234,7 +234,7 @@ def run_eval(
             B, seq_len = target.shape
             pred_classes = preds[:, :, -1].reshape(B, seq_len, 2).argmax(-1)
             correct       += (pred_classes == target).sum().item()
-            total_samples += target.size(0)
+            total_samples += target.numel()   # per-position accuracy: B * seq_len, not B
 
             batch_losses.append(ctm_loss(preds, target, certs).item())
             cert_start_vals.append(certs[:, 1, 0].mean().item())
@@ -244,7 +244,7 @@ def run_eval(
     val_loss_avg = float(np.mean(batch_losses))
 
     print(f"  [{run_name}] Val acc={val_acc:.4f} loss={val_loss_avg:.4f} "
-          f"cert {np.mean(cert_start_vals):.3f}→{np.mean(cert_final_vals):.3f}")
+          f"cert {np.mean(cert_start_vals):.3f}->{np.mean(cert_final_vals):.3f}")
 
     return val_acc, val_loss_avg, cert_start_vals, cert_final_vals
 
